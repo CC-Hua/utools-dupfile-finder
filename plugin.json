@@ -1,0 +1,28 @@
+{
+  "main": "index.html",
+  "logo": "logo.png",
+  "preload": "preload/services.js",
+  "pluginSetting": {
+    "single": true
+  },
+  "features": [
+    {
+      "code": "duplicate-finder",
+      "description": "按文件内容识别重复文件；扫描只读，可选的一键清理需逐组预览与二次确认",
+      "cmds": [
+        "文件查重",
+        "重复文件",
+        "查找重复文件",
+        "清理重复文件",
+        "删除重复文件",
+        {
+          "type": "files",
+          "fileType": "directory",
+          "label": "扫描此文件夹查重",
+          "minLength": 1,
+          "maxLength": 10
+        }
+      ]
+    }
+  ]
+}
