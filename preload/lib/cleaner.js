@@ -436,6 +436,7 @@ async function executeClean(result, rawSelection, options = {}) {
   let freedBytes = 0
   let skippedFiles = 0
   let processed = 0
+  let processedTasks = 0
   let cancelled = false
 
   /** 阶段 1：并发验证所有组的保留项，每组只做一次全文件哈希 */
@@ -508,9 +509,26 @@ async function executeClean(result, rawSelection, options = {}) {
     if (!verified.ok) {
       return failItem(d.path, g.groupId, g.size, verified.reason, verified.message, verified.errorCode)
     }
+    // 硬链接判定必须基于同一时刻的 lstat：阶段 1 的 keepCheck.stat 是删除前旧快照，
+    // 保留项若被替换但沿用旧 inode / size / mtime，硬链接比对会失真（漏过真硬链接，
+    // 或保留项内容已变却仍按旧快照继续删掉其余副本）。此处重读保留项，身份变化即跳过。
+    let keepStat
+    try {
+      keepStat = await fsp.lstat(g.keep.path)
+    } catch (err) {
+      return failItem(d.path, g.groupId, g.size, 'KEEP_UNVERIFIED', '保留项未通过复核，整组跳过', err && err.code ? String(err.code) : null)
+    }
+    const prevKeepStat = keepCheck.stat
     if (
-      verified.stat.dev === keepCheck.stat.dev &&
-      verified.stat.ino === keepCheck.stat.ino &&
+      keepStat.isSymbolicLink() || !keepStat.isFile() ||
+      keepStat.dev !== prevKeepStat.dev || keepStat.ino !== prevKeepStat.ino ||
+      keepStat.size !== prevKeepStat.size || keepStat.mtimeMs !== prevKeepStat.mtimeMs
+    ) {
+      return failItem(d.path, g.groupId, g.size, 'KEEP_UNVERIFIED', '保留项未通过复核，整组跳过', null)
+    }
+    if (
+      verified.stat.dev === keepStat.dev &&
+      verified.stat.ino === keepStat.ino &&
       verified.stat.ino !== 0
     ) {
       return failItem(d.path, g.groupId, g.size, 'HARD_LINK', '与保留项为同一硬链接，删除不会释放空间，已跳过', null)
@@ -622,6 +640,7 @@ async function executeClean(result, rawSelection, options = {}) {
         gr.deletedPaths.push(d.path)
       }
       processed += 1
+      processedTasks += 1
     }
 
     progress.processedFiles = processed
@@ -633,8 +652,21 @@ async function executeClean(result, rawSelection, options = {}) {
   }
 
   if (cancelled) {
-    const remaining = Math.max(0, totalFiles - processed)
-    skippedFiles += remaining
+    // 中止时，批次循环尚未处理的任务此前只在汇总里被算作「跳过」，却没有记入所属组的
+    // skipped / skippedPaths / failures，导致每组结果与 totals.skippedFiles 对不上、
+    // 用户也看不到哪些文件被跳过。按与批次循环一致的方式逐条回填（仅影响中止路径）。
+    const unprocessed = tasks.slice(processedTasks)
+    const remaining = unprocessed.length
+    for (const { g, d } of unprocessed) {
+      const item = failItem(d.path, g.groupId, g.size, 'CANCELLED', '用户中止清理，该文件未处理', null)
+      failures.push(item)
+      const gr = groupState.get(g.groupId)
+      gr.failures.push(item)
+      gr.skipped += 1
+      gr.skippedPaths.push(d.path)
+      skippedFiles += 1
+    }
+    progress.failedFiles = failures.length
     errors.push({ code: 'CANCELLED', message: `用户中止清理，剩余 ${remaining} 个文件未处理`, phase: 'clean' })
   }
 
