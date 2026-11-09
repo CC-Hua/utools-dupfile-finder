@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+
+*.upxs
+*.zip
+*.rar
+*.7z
+
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
